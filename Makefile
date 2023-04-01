@@ -7,11 +7,11 @@ all: icbm
 	@printf 'CC	%s\n' $@
 	@$(CC) -c -o $@ $(CFLAGS) $^
 
-icbm: main.o log.o irc.o
+icbm: main.o log.o irc.o client.o
 	@printf 'CC	%s\n' $@
 	@$(CC) -o $@ $^
 
 .PHONY: clean
 
 clean:
-	rm -f main.o log.o irc.o icbm
+	rm -f main.o log.o irc.o client.o icbm
