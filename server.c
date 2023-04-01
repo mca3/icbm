@@ -17,12 +17,6 @@ server_ircf(const char *fmt, ...)
 
 }
 
-int
-server_read(struct irc_message *out)
-{
-
-}
-
 void
 server_readable(void)
 {

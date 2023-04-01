@@ -16,10 +16,11 @@
 #include "irc.h"
 #include "client.h"
 #include "server.h"
+#include "main.h"
 
-static int pollfdsz = 32;
-static int pollfdptr = 1; // First are is server and IRC network
-static struct pollfd *pollfds;
+int pollfdsz = 32;
+int pollfdptr = 1; // First are is server and IRC network
+struct pollfd *pollfds;
 
 int acceptfd = -1;
 int ircfd = -1;
@@ -151,6 +152,8 @@ accept_client()
 	pollfds[pollfdptr].events = POLLIN;
 
 	debugf("New connection on fd %d. pollfdptr is %d", fd, pollfdptr);
+
+	client_sendf(&clients[clientptr], "PING :%d", time(NULL));
 }
 
 static void

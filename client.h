@@ -16,5 +16,4 @@ extern struct client *clients;
 void client_readable(int fd);
 void client_writable(int fd);
 
-int client_ircf(struct client *c, const char *fmt, ...);
-int client_read(struct client *c, struct irc_message *out);
+int client_sendf(struct client *c, const char *fmt, ...);
