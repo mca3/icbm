@@ -10,7 +10,7 @@
 #include "log.h"
 #include "main.h"
 
-int clientsz = 32;
+int clientsz = 8;
 int clientptr = -1;
 struct client *clients;
 
@@ -61,7 +61,7 @@ client_sendf(struct client *c, const char *fmt, ...)
 	return bufio_write(&c->b, buf, n);
 }
 
-void
+int
 client_readable(int fd)
 {
 	int n;
@@ -71,11 +71,11 @@ client_readable(int fd)
 	if ((n = bufio_readable(&c->b, fd)) == -1) {
 		warnf("failed reading from client fd %d: %s", fd, strerror(errno));
 		close(ircfd);
-		return;
+		return 0;
 	}
 
 	if (!n) // Partial read
-		return;
+		return 0;
 	
 	debugf("%d << %s", fd, c->b.recvbuf);
 
@@ -85,7 +85,10 @@ client_readable(int fd)
 	if (irc_parse(c->b.recvbuf, &msg)) {
 		warnf("Failed to parse IRC message from client fd %d. Disconnecting.", fd);
 		close(fd);
+		return 0;
 	}
+
+	return 1;
 }
 
 void

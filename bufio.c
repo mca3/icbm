@@ -7,6 +7,31 @@
 #include "bufio.h"
 #include "log.h"
 
+static char *
+scan_newline(struct bufio *b)
+{
+	// Try to find a message delimiter.
+	// We're looking just for a newline because that is guaranteed to be
+	// there in an IRC message.
+	char *nl = memchr(b->recvbuf, '\n', b->recvptr);
+	if (nl == NULL) // Nothing yet
+		return NULL;
+
+	// Set zeroes on the delimiters.
+	// Remove '\r' if it is there, because we are liberal in what we accept
+	// and '\r' can be omitted.
+	if (nl-(b->recvbuf) > 1 && *(nl - 1) == '\r')
+		*(nl - 1) = 0;
+	else
+		*(nl) = 0;
+
+	// This field indicates that this method found some data, and that
+	// everything up to last_recvptr should be removed.
+	// Reset by the next call to bufio_readable.
+	b->last_recvptr = nl - b->recvbuf + 1;
+	return nl;
+}
+
 /* bufio_readable attempts to read a newline-delimited message from fd.
  * The newline will be mangled into a null byte, and if the newline is
  * preceeded by a '\r' then that will also be mangled into a null byte.
@@ -23,6 +48,8 @@
 int
 bufio_readable(struct bufio *b, int fd)
 {
+	int n;
+	char *msg;
 	assert(b != NULL);
 
 	// IRC messages are supposed to be at most 2048 characters in length
@@ -42,41 +69,44 @@ bufio_readable(struct bufio *b, int fd)
 	// the beginning because it allows processing to continue normally
 	// without a need to call something like bufio_done_read().
 	if (b->last_recvptr) {
-		memmove(b->recvbuf, b->recvbuf+b->last_recvptr+1, b->recvptr - b->last_recvptr);
-		b->recvptr -= b->last_recvptr+1;
+		memmove(b->recvbuf, b->recvbuf+b->last_recvptr, b->recvptr - b->last_recvptr);
+		b->recvptr -= b->last_recvptr;
 		b->last_recvptr = 0;
 	}
 
-	// Read as much as we can
-	int n = read(fd, b->recvbuf+b->recvptr, sizeof(b->recvbuf)-b->recvptr);
-	if (n == -1)
+	/* This region kinda sucks but I don't know how else to do it. I'll
+	 * explain:
+	 *
+	 * - If there's a message in the buffer, we return >= 1 to say there is.
+	 *   The message gets invalidated by the next call to bufio_readable,
+	 *   and if you're doing it right, then a call to a function that does
+	 *   stuff with the data from bufio will loop until the return code is
+	 *   0, as in no data.
+	 * - If not, we attempt to read data.
+	 * - If the read fails with EAGAIN, return 0 and stop. There is nothing
+	 *   to read currently.
+	 * - If the read succeeds, restart the cycle.
+	 */
+
+read:
+	// Determine if there's any data we can use already in the buffer.
+	if ((msg = scan_newline(b)) != NULL) {
+		// Yes, there is! Return something for success.
+		return b->last_recvptr;
+	}
+
+	// Read as much as we can and loop back up above if errno isn't EAGAIN.
+	n = read(fd, b->recvbuf+b->recvptr, sizeof(b->recvbuf)-b->recvptr);
+	if (n == -1) {
+		if (errno & EAGAIN) return 0;
 		return n;
+	}
 
 	b->recvptr += n;
 
-	// Try to find a message delimiter.
-	// We're looking just for a newline because that is guaranteed to be
-	// there in an IRC message.
-	char *nl = memchr(b->recvbuf, '\n', b->recvptr);
-	if (nl == NULL) // Nothing yet
-		return 0;
+	goto read;
 
-	// Set zeroes on the delimiters.
-	// Remove '\r' if it is there, because we are liberal in what we accept
-	// and '\r' can be omitted.
-	if (nl-(b->recvbuf) > 1 && *(nl - 1) == '\r')
-		*(nl - 1) = 0;
-	else
-		*(nl) = 0;
-
-	// We do not clean up the buffer here, but invalidate its contents on
-	// the next call to bufio_readable.
-	// This field indicates that the last call was successful and the data
-	// up until last_recvptr should be removed.
-	b->last_recvptr = nl - b->recvbuf;
-
-	// Return something positive for success.
-	return b->last_recvptr;
+	/* Unreachable. */
 }
 
 /* bufio_writable attempts to write outstanding data to fd.
@@ -94,8 +124,6 @@ int
 bufio_writable(struct bufio *b, int fd)
 {
 	assert(b != NULL);
-
-	debugf("%d bytes to %d", b->sendptr, fd);
 
 	int n = write(fd, b->sendbuf, b->sendptr);
 	if (n == -1)

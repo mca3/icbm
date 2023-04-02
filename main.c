@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "log.h"
 #include "irc.h"
@@ -24,6 +25,9 @@ struct pollfd *pollfds;
 
 int acceptfd = -1;
 int ircfd = -1;
+
+static char *username = NULL;
+static char *nickname = NULL;
 
 /* listenfd attempts to listen on addr:port and exits if it cannot. */
 static int
@@ -161,16 +165,6 @@ pollloop(void)
 {
 	int i;
 
-	clients = realloc(NULL, sizeof(struct client)*clientsz);
-	pollfds = realloc(NULL, sizeof(struct pollfd)*pollfdsz);
-
-	// Set the first two pollfds up
-	pollfds[0].fd = acceptfd;
-	pollfds[0].events = POLLIN;
-
-	pollfds[1].fd = ircfd;
-	pollfds[1].events = POLLIN;
-
 	for (;;) {
 		i = poll(pollfds, pollfdptr+1, -1);
 		if (i == -1) {
@@ -184,7 +178,7 @@ pollloop(void)
 		}
 
 		if (pollfds[1].revents & POLLIN)
-			server_readable();
+			while (server_readable());
 		if (pollfds[1].revents & POLLOUT)
 			server_writable();
 		if (pollfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -194,7 +188,7 @@ pollloop(void)
 
 		for (int i = 2; i <= pollfdptr; ++i) {
 			if (pollfds[i].revents & POLLIN)
-				client_readable(pollfds[i].fd);
+				while (client_readable(pollfds[i].fd));
 			if (pollfds[i].revents & POLLOUT)
 				client_writable(pollfds[i].fd);
 		}
@@ -225,12 +219,69 @@ pollloop(void)
 	}
 }
 
-int
-main(void)
+static void
+init_poll(void)
 {
+	clients = realloc(NULL, sizeof(struct client)*clientsz);
+	if (!clients) {
+		errorf("Failed to allocate clients (%d bytes)", sizeof(struct client)*clientsz);
+		exit(EXIT_FAILURE);
+	}
+
+	pollfds = realloc(NULL, sizeof(struct pollfd)*pollfdsz);
+	if (!pollfds) {
+		errorf("Failed to allocate pollfds (%d bytes)", sizeof(struct pollfd)*pollfdsz);
+		exit(EXIT_FAILURE);
+	}
+
+	// Set the first two pollfds up
+	pollfds[0].fd = acceptfd;
+	pollfds[0].events = POLLIN;
+
+	pollfds[1].fd = ircfd;
+	pollfds[1].events = POLLIN;
+}
+
+int
+main(int argc, char *argv[])
+{
+	int opt;
+
+	char *address = "127.0.0.1";
+	char *port = "6667";
+	char *laddress = "127.0.0.1";
+	char *lport = "16667";
+
+	while ((opt = getopt(argc, argv, "u:n:a:p:A:P:")) != -1) {
+		switch (opt) {
+		case 'u': username = optarg; break;
+		case 'n': nickname = optarg; break;
+		case 'a': address = optarg; break;
+		case 'p': port = optarg; break;
+		case 'A': laddress = optarg; break;
+		case 'P': lport = optarg; break;
+		}
+	}
+
+	if (!username) {
+		if (!(username = getenv("LOGNAME"))) {
+			errorf("Unable to get username. LOGNAME was not set.");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (!nickname)
+		nickname = username;
+
 	acceptfd = listenfd("127.0.0.1", "16667");
 	ircfd = connectfd("127.0.0.1", "6667");
 	debugf("listen fd %d, irc fd %d", acceptfd, ircfd);
+
+	init_poll();
+
+	server_sendf("NICK :%s", nickname);
+	server_sendf("USER %s 0 * :%s", nickname, "icbm");
+
 	pollloop();
 	close(acceptfd);
 	close(ircfd);
