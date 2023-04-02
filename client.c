@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 #include "client.h"
+#include "evloop.h"
 #include "log.h"
-#include "main.h"
 
 int clientsz = 8;
 int clientptr = -1;
@@ -35,14 +35,8 @@ client_sendf(struct client *c, const char *fmt, ...)
 {
 	char buf[2048];
 
-	// Find our pfd
-	for (int i = 0; i <= pollfdptr; ++i) {
-		if (pollfds[i].fd == c->fd) {
-			// Add POLLOUT
-			pollfds[i].events |= POLLOUT;
-			break;
-		}
-	}
+	// Tell the event loop we want to write out
+	ev_set_writeout(c->fd, 1);
 
 	// Chuck stuff onto the buffer
 	va_list ap;
@@ -100,14 +94,8 @@ client_writable(int fd)
 	int n = bufio_writable(&c->b, fd);
 
 	if (n > 0) {
-		// Remove POLLOUT if we have nothing more to send
-		for (int i = 0; i <= pollfdptr; ++i) {
-			if (pollfds[i].fd == c->fd) {
-				pollfds[i].events ^= POLLOUT;
-				pollfds[i].revents ^= POLLOUT;
-				break;
-			}
-		}
+		// Tell the event loop we no longer want to write out
+		ev_set_writeout(fd, 0);
 	} else if (n == -1) {
 		warnf("Write failed to fd %d: %s", fd, strerror(errno));
 		close(fd);

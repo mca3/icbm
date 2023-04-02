@@ -5,10 +5,10 @@
 #include <stdio.h>
 
 #include "bufio.h"
+#include "evloop.h"
 #include "irc.h"
 #include "log.h"
 #include "server.h"
-#include "main.h"
 
 static struct bufio server_bufio = {0};
 
@@ -23,14 +23,8 @@ server_sendf(const char *fmt, ...)
 {
 	char buf[2048];
 
-	// Find our pfd
-	for (int i = 0; i <= pollfdptr; ++i) {
-		if (pollfds[i].fd == ircfd) {
-			// Add POLLOUT
-			pollfds[i].events |= POLLOUT;
-			break;
-		}
-	}
+	// Tell the event loop we want to write out
+	ev_set_writeout(ircfd, 1);
 
 	// Chuck stuff onto the buffer
 	va_list ap;
@@ -103,14 +97,8 @@ server_writable(void)
 	int n = bufio_writable(&server_bufio, ircfd);
 
 	if (n >= 1) { // No more data
-		// Remove POLLOUT if we have nothing more to send
-		for (int i = 0; i <= pollfdptr; ++i) {
-			if (pollfds[i].fd == ircfd) {
-				pollfds[i].events ^= POLLOUT;
-				pollfds[i].revents ^= POLLOUT;
-				break;
-			}
-		}
+		// Tell the event loop we no longer want to write out
+		ev_set_writeout(ircfd, 1);
 	} else if (n == -1) {
 		warnf("Server write failed: %s", strerror(errno));
 		close(ircfd);
