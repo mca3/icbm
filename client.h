@@ -1,12 +1,9 @@
 #include "irc.h"
+#include "bufio.h"
 
 struct client {
 	int fd;
-
-	char sendbuf[4096];
-	char recvbuf[4096];
-	int sendptr;
-	int recvptr;
+	struct bufio b;
 };
 
 extern int clientsz;

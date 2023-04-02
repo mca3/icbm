@@ -7,7 +7,7 @@ all: icbm
 	@printf 'CC	%s\n' $@
 	@$(CC) -c -o $@ $(CFLAGS) $^
 
-icbm: main.o log.o irc.o client.o server.o
+icbm: main.o log.o irc.o client.o server.o bufio.o
 	@printf 'CC	%s\n' $@
 	@$(CC) -o $@ $^
 

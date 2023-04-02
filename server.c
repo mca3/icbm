@@ -2,50 +2,33 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "bufio.h"
 #include "irc.h"
 #include "log.h"
 #include "server.h"
 
-static char server_sendbuf[4096];
-static char server_recvbuf[4096];
-static int server_sendptr = 0;
-static int server_recvptr = 0;
-
-int
-server_ircf(const char *fmt, ...)
-{
-
-}
+static struct bufio server_bufio = {0};
 
 void
 server_readable(void)
 {
-	// Read as much as we can
-	int n = read(ircfd, server_recvbuf+server_recvptr, sizeof(server_recvbuf)-server_recvptr);
-	if (n == -1) {
-		// Hangup!
+	int n;
+
+	if ((n = bufio_readable(&server_bufio, ircfd)) == -1) {
 		warnf("failed reading from server: %s", strerror(errno));
 		close(ircfd);
 		return;
 	}
 
-	server_recvptr += n;
-
-	// Try to find a message
-	char *nl = memchr(server_recvbuf, '\n', server_recvptr);
-	if (nl == NULL) // Nothing yet
+	if (!n) // Partial read
 		return;
 
-	// Set zeroes
-	if (nl-(server_recvbuf) > 1 && *(nl - 1) == '\r')
-		*(nl - 1) = 0;
-	else
-		*(nl) = 0;
+	debugf("server << %s", server_bufio.recvbuf);
 
 	// Parse message
 	struct irc_message msg = {0};
 
-	if (irc_parse(server_recvbuf, &msg)) {
+	if (irc_parse(server_bufio.recvbuf, &msg)) {
 		warnf("Failed to parse IRC message from server. Disconnecting.");
 		close(ircfd);
 		return;
@@ -56,12 +39,23 @@ server_readable(void)
 	if (strcmp(msg.command, "ERROR") == 0) {
 		errorf("Server error: %s", msg.params[0]); 
 		close(ircfd);
+
+		// Pass it onto everyone.
+		// client_forward(&msg);
 		return;
+	} else if (strcmp(msg.command, "PING") == 0) {
+		/*
+		// Return a PONG
+		msg.command = "PONG";
+		msg.source = NULL;
+		msg.tags = NULL;
+		server_send(&msg);
+		return;
+		*/
 	}
 
-	// Reset buffer
-	memmove(server_recvbuf, nl+1, server_recvptr - (nl - server_recvbuf));
-	server_recvptr -= (nl - server_recvbuf)+1;
+	// Pass it onto everyone.
+	// client_forward(&msg);
 }
 
 void

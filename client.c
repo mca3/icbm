@@ -27,11 +27,14 @@ find_client(int fd)
 /* client_sendf sends a formatted response (ideally like IRC) to the client
  * The \r\n delimiters are automatically appended.
  *
- * The number of bytes written to the send buffer is returned.
+ * The number of bytes written to the send buffer is returned, or -1 upon
+ * failure.
  */
 int
 client_sendf(struct client *c, const char *fmt, ...)
 {
+	char buf[2048];
+
 	// Find our pfd
 	for (int i = 0; i <= pollfdptr; ++i) {
 		if (pollfds[i].fd == c->fd) {
@@ -45,65 +48,44 @@ client_sendf(struct client *c, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	int n = vsnprintf(c->sendbuf+c->sendptr, sizeof(c->sendbuf)-c->sendptr, fmt, ap);
+	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
 	
-	debugf("%d >> %s", c->fd, c->sendbuf+c->sendptr);
+	debugf("%d >> %s", c->fd, buf);
 
-	n += snprintf(c->sendbuf+c->sendptr+n, sizeof(c->sendbuf)-c->sendptr-n, "\r\n");
+	n += snprintf(buf+n, sizeof(buf)-n, "\r\n");
 
 	// TODO: Handle overfull scenarios gracefully. *printf ALWAYS returns
 	// what it would have written.
-	assert(c->sendptr + n < sizeof(c->sendbuf));
 
-	c->sendptr += n;
-
-	return n;
+	return bufio_write(&c->b, buf, n);
 }
 
 void
 client_readable(int fd)
 {
+	int n;
 	struct client *c = find_client(fd);
 	assert(c != NULL);
 
-	// Read as much as we can
-	int n = read(fd, c->recvbuf+c->recvptr, sizeof(c->recvbuf)-c->recvptr);
-	if (n == -1) {
-		// Hangup!
+	if ((n = bufio_readable(&c->b, fd)) == -1) {
 		warnf("failed reading from client fd %d: %s", fd, strerror(errno));
-		close(fd);
+		close(ircfd);
 		return;
 	}
 
-	c->recvptr += n;
-
-	// TODO: Handle overful scenarios
-
-	// Try to find a message
-	char *nl = memchr(c->recvbuf, '\n', c->recvptr);
-	if (nl == NULL) // Nothing yet
+	if (!n) // Partial read
 		return;
-
-	// Set zeroes
-	if (nl-(c->recvbuf) > 1 && *(nl - 1) == '\r')
-		*(nl - 1) = 0;
-	else
-		*(nl) = 0;
 	
-	debugf("%d << %s", fd, c->recvbuf);
+	debugf("%d << %s", fd, c->b.recvbuf);
 
 	// Parse message
 	struct irc_message msg = {0};
 
-	if (irc_parse(c->recvbuf, &msg)) {
+	if (irc_parse(c->b.recvbuf, &msg)) {
 		warnf("Failed to parse IRC message from client fd %d. Disconnecting.", fd);
 		close(fd);
 	}
-
-	// Reset buffer
-	memmove(c->recvbuf, nl+1, c->recvptr - (nl - c->recvbuf));
-	c->recvptr -= (nl - c->recvbuf)+1;
 }
 
 void
@@ -112,13 +94,9 @@ client_writable(int fd)
 	struct client *c = find_client(fd);
 	assert(c != NULL);
 
-	int n = write(fd, c->sendbuf, c->sendptr);
+	int n = bufio_writable(&c->b, fd);
 
-	// Move everything back
-	memmove(c->sendbuf, c->sendbuf+c->sendptr, c->sendptr-n);
-	c->sendptr -= n;
-
-	if (c->sendptr == 0) {
+	if (n > 0) {
 		// Remove POLLOUT if we have nothing more to send
 		for (int i = 0; i <= pollfdptr; ++i) {
 			if (pollfds[i].fd == c->fd) {
@@ -127,5 +105,8 @@ client_writable(int fd)
 				break;
 			}
 		}
+	} else if (n == -1) {
+		warnf("Write failed to fd %d: %s", fd, strerror(errno));
+		close(fd);
 	}
 }
