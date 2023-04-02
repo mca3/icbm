@@ -55,6 +55,34 @@ client_sendf(struct client *c, const char *fmt, ...)
 	return bufio_write(&c->b, buf, n);
 }
 
+/* client_sendmsg sends an IRC message to the client.
+ *
+ * The number of bytes written to the send buffer is returned, or -1 upon
+ * failure.
+ */
+int
+client_sendmsg(struct client *c, struct irc_message *msg)
+{
+	char buf[2048];
+	int n;
+
+	if ((n = irc_string(msg, buf, sizeof(buf))) == -1)
+		return -1;
+
+	// Tell the event loop we want to write out
+	ev_set_writeout(ircfd, 1);
+
+	// Chuck stuff onto the buffer
+	debugf("%d >> %s", c->fd, buf);
+
+	n += snprintf(buf+n, sizeof(buf)-n, "\r\n");
+
+	// TODO: Handle overfull scenarios gracefully. *printf ALWAYS returns
+	// what it would have written.
+
+	return bufio_write(&c->b, buf, n);
+}
+
 int
 client_readable(int fd)
 {

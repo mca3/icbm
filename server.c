@@ -5,12 +5,43 @@
 #include <stdio.h>
 
 #include "bufio.h"
+#include "client.h"
 #include "evloop.h"
 #include "irc.h"
 #include "log.h"
 #include "server.h"
 
 static struct bufio server_bufio = {0};
+
+static void
+server_client_forward(struct irc_message *msg)
+{
+	// Write the message to a buffer first
+	char buf[2048];
+	int n;
+
+	if ((n = irc_string(msg, buf, sizeof(buf))) == -1)
+		return;
+
+	// Tell the event loop we want to write out
+	ev_set_writeout(ircfd, 1);
+
+	// Chuck stuff onto the buffer
+	debugf("* >> %s", buf);
+
+	n += snprintf(buf+n, sizeof(buf)-n, "\r\n");
+
+	// TODO: Handle overfull scenarios gracefully. *printf ALWAYS returns
+	// what it would have written.
+
+	// Send to all clients
+	// TODO: Only those whom are authenticated
+	for (int i = 0; i <= clientptr; ++i) {
+		// TODO: This should be a client_... function.
+		ev_set_writeout(clients[i].fd, 1);
+		bufio_write(&clients[i].b, buf, n);
+	}
+}
 
 /* server_sendf sends a formatted response (ideally like IRC) to the server
  * The \r\n delimiters are automatically appended.
@@ -33,6 +64,34 @@ server_sendf(const char *fmt, ...)
 	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
 	
+	debugf("server >> %s", buf);
+
+	n += snprintf(buf+n, sizeof(buf)-n, "\r\n");
+
+	// TODO: Handle overfull scenarios gracefully. *printf ALWAYS returns
+	// what it would have written.
+
+	return bufio_write(&server_bufio, buf, n);
+}
+
+/* server_sendmsg sends an IRC message to the server.
+ *
+ * The number of bytes written to the send buffer is returned, or -1 upon
+ * failure.
+ */
+int
+server_sendmsg(struct irc_message *msg)
+{
+	char buf[2048];
+	int n;
+
+	if ((n = irc_string(msg, buf, sizeof(buf))) == -1)
+		return -1;
+
+	// Tell the event loop we want to write out
+	ev_set_writeout(ircfd, 1);
+
+	// Chuck stuff onto the buffer
 	debugf("server >> %s", buf);
 
 	n += snprintf(buf+n, sizeof(buf)-n, "\r\n");
@@ -73,21 +132,21 @@ server_readable(void)
 		close(ircfd);
 
 		// Pass it onto everyone.
-		// client_forward(&msg);
+		server_client_forward(&msg);
 		return 0;
 	} else if (strcmp(msg.command, "PING") == 0) {
-		/*
 		// Return a PONG
 		msg.command = "PONG";
 		msg.source = NULL;
 		msg.tags = NULL;
-		server_send(&msg);
-		return;
-		*/
+
+		server_sendmsg(&msg);
+		return 1;
 	}
 
 	// Pass it onto everyone.
-	// client_forward(&msg);
+	server_client_forward(&msg);
+
 	return 1;
 }
 

@@ -12,4 +12,5 @@ struct irc_message {
 extern int ircfd; /* Defined in main.c */
 
 int irc_parse(char *msg, struct irc_message *out);
+int irc_string(struct irc_message *msg, char *buf, size_t n);
 #endif
