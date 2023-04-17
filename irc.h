@@ -2,11 +2,13 @@
 #define INC_IRC_H
 #include <stddef.h>
 
+#define IRC_PARAM_MAX 15
+
 struct irc_message {
 	char *tags;
 	char *source;
 	char *command;
-	char *params[15]; // XXX: Should be more according to IRC v3.	
+	char *params[IRC_PARAM_MAX]; // XXX: Should be more according to IRC v3.	
 };
 
 extern int ircfd; /* Defined in main.c */

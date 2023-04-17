@@ -1,3 +1,5 @@
+#define _XOPEN_SOURCE 500
+
 #include <assert.h>
 #include <errno.h>
 #include <poll.h>
@@ -5,10 +7,29 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 #include "client.h"
 #include "evloop.h"
 #include "log.h"
+#include "server.h"
+#include "vec.h"
+
+static int cli_cap(struct client *c, struct irc_message *msg);
+static int cli_login(struct client *c, struct irc_message *msg);
+static int cli_ping(struct client *c, struct irc_message *msg);
+
+static struct {
+	char *command;
+	int (*f)(struct client *c, struct irc_message *msg);
+} client_dispatch[] = {
+	{ "CAP",	cli_cap },
+	{ "USER",	cli_login },
+	{ "NICK",	cli_login },
+
+	{ "PING",	cli_ping },
+	{ "PONG",	cli_ping },
+};
 
 int clientsz = 8;
 int clientptr = -1;
@@ -70,7 +91,7 @@ client_sendmsg(struct client *c, struct irc_message *msg)
 		return -1;
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(ircfd, 1);
+	ev_set_writeout(c->fd, 1);
 
 	// Chuck stuff onto the buffer
 	debugf("%d >> %s", c->fd, buf);
@@ -110,6 +131,14 @@ client_readable(int fd)
 		return 0;
 	}
 
+	// Try to hit a recognized command.
+	for (size_t i = 0; i < sizeof(client_dispatch)/sizeof(*client_dispatch); ++i)
+		if (strcmp(client_dispatch[i].command, msg.command) == 0)
+			return client_dispatch[i].f(c, &msg);
+
+	// Pass onto server if all else fails
+	server_sendmsg(&msg);
+
 	return 1;
 }
 
@@ -128,4 +157,64 @@ client_writable(int fd)
 		warnf("Write failed to fd %d: %s", fd, strerror(errno));
 		close(fd);
 	}
+}
+
+/*
+ * The rest of the file handles commands.
+ */
+
+int
+cli_cap(struct client *c, struct irc_message *msg)
+{
+
+}
+
+int
+cli_login(struct client *c, struct irc_message *msg)
+{
+	if (c->nick)
+		free(c->nick);
+	c->nick = strdup(msg->params[0]);
+
+	client_sendf(c, ":%s 001 %s :Welcome to icbm, %s", "example.com", c->nick, c->nick);
+
+	struct irc_message out = {0};
+	out.source = "example.com"; // TODO
+	out.command = "005";
+	out.params[0] = c->nick; // client ident
+
+	// TODO: Ensure 512 bytes is not exceeded
+
+	size_t ctr = 1;
+	for (size_t i = 0; i < server_isupport.len; ++i) {
+		out.params[ctr++] = server_isupport.data[i];
+
+		if (ctr == IRC_PARAM_MAX-2) {
+			out.params[ctr] = "are supported by this server";
+			client_sendmsg(c, &out);
+			ctr = 1;
+		}
+	}
+
+	if (ctr > 1) {
+		out.params[ctr] = "are supported by this server";
+		if (ctr+1 < IRC_PARAM_MAX)
+			out.params[ctr+1] = NULL;
+		client_sendmsg(c, &out);
+	}
+
+	return 1;
+}
+
+int
+cli_ping(struct client *c, struct irc_message *msg)
+{
+	if (strcmp(msg->command, "PONG") == 0)
+		return 1;
+
+	msg->tags = NULL;
+	msg->source = "example.com"; // TODO
+	
+	client_sendmsg(c, msg);
+	return 1;
 }

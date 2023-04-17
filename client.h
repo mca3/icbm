@@ -4,6 +4,8 @@
 struct client {
 	int fd;
 	struct bufio b;
+	
+	char *nick;
 };
 
 extern int clientsz;

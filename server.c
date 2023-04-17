@@ -1,8 +1,11 @@
+#define _XOPEN_SOURCE 500
+
 #include <errno.h>
-#include <string.h>
-#include <unistd.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "bufio.h"
 #include "client.h"
@@ -10,8 +13,27 @@
 #include "irc.h"
 #include "log.h"
 #include "server.h"
+#include "vec.h"
 
 static struct bufio server_bufio = {0};
+
+// Initialized by main
+struct mca_vector server_isupport = {0};
+
+static int srv_error(struct irc_message *msg);
+static int srv_isupport(struct irc_message *msg);
+static int srv_ping(struct irc_message *msg);
+
+static struct {
+	char *command;
+	int (*f)(struct irc_message *msg);
+} server_dispatch[] = {
+	{ "005",	srv_isupport },
+
+	{ "ERROR",	srv_error },
+	{ "PING",	srv_ping },
+	{ "PONG",	srv_ping },
+};
 
 static void
 server_client_forward(struct irc_message *msg)
@@ -127,24 +149,12 @@ server_readable(void)
 		return 0;
 	}
 
-	if (strcmp(msg.command, "ERROR") == 0) {
-		errorf("Server error: %s", msg.params[0]); 
-		close(ircfd);
+	// Try to hit a recognized command.
+	for (size_t i = 0; i < sizeof(server_dispatch)/sizeof(*server_dispatch); ++i)
+		if (strcmp(server_dispatch[i].command, msg.command) == 0)
+			return server_dispatch[i].f(&msg);
 
-		// Pass it onto everyone.
-		server_client_forward(&msg);
-		return 0;
-	} else if (strcmp(msg.command, "PING") == 0) {
-		// Return a PONG
-		msg.command = "PONG";
-		msg.source = NULL;
-		msg.tags = NULL;
-
-		server_sendmsg(&msg);
-		return 1;
-	}
-
-	// Pass it onto everyone.
+	// Fallthrough case: pass it onto everyone.
 	server_client_forward(&msg);
 
 	return 1;
@@ -155,11 +165,81 @@ server_writable(void)
 {
 	int n = bufio_writable(&server_bufio, ircfd);
 
-	if (n >= 1) { // No more data
+	if (n > 0) { // No more data
 		// Tell the event loop we no longer want to write out
-		ev_set_writeout(ircfd, 1);
+		ev_set_writeout(ircfd, 0);
 	} else if (n == -1) {
 		warnf("Server write failed: %s", strerror(errno));
 		close(ircfd);
 	}
+}
+
+/* gets the index of the isupport key if there is one, otherwise returns -1. */
+static size_t
+isupport_key(char *key)
+{
+	for (size_t i = 0; i < server_isupport.len; ++i)
+		if (strcmp(server_isupport.data[i], key) == 0)
+			return i;
+	return -1;
+}
+
+/*
+ * The following section is all command related
+ */
+
+int
+srv_error(struct irc_message *msg)
+{
+	errorf("Server error: %s", msg->params[0]); 
+	close(ircfd);
+
+	// Pass it onto everyone.
+	server_client_forward(msg);
+	return 0;
+}
+
+int
+srv_isupport(struct irc_message *msg)
+{
+	for (size_t i = 1; i < IRC_PARAM_MAX; ++i) {
+		if (!msg->params[i] || strchr(msg->params[i], ' '))
+			break;
+
+		char *v = strdup(msg->params[i]);
+
+		// Mangles this paramater, but leaves us the key
+		char *eq = strchr(v, '=');
+		if (eq)
+			*eq = 0;
+
+		size_t j = isupport_key(msg->params[i]);
+
+		// Restore so we can forward this message
+		strcpy(v, msg->params[i]);
+		if (j != -1) {
+			free(server_isupport.data[j]);
+			server_isupport.data[j] = v;
+		} else
+			mca_vector_push(&server_isupport, v);
+	}
+
+	// Pass it onto everyone.
+	server_client_forward(msg);
+
+	return 1;
+}
+
+int
+srv_ping(struct irc_message *msg)
+{
+	if (strcmp(msg->command, "PONG") == 0)
+		return 1;
+
+	msg->command = "PONG";
+	msg->source = NULL;
+	msg->tags = NULL;
+
+	server_sendmsg(msg);
+	return 1;
 }

@@ -65,7 +65,10 @@ remove_client(int fd, int pfd)
 			break;
 	}
 
-	// Delete from clients
+	// First, free some space.
+	if (clients[cli].nick != NULL)
+		free(clients[cli].nick);
+
 	// We must move all clients ahead of it back one space
 	memmove(&clients[cli], &clients[cli+1], sizeof(struct client)*(clientptr-cli));
 	clientptr--;
@@ -80,7 +83,7 @@ ev_set_writeout(int fd, int val)
 {
 	for (int i = 0; i <= pollfdptr; ++i) {
 		if (pollfds[i].fd == fd)
-			pollfds[i].events = val ? (pollfds[i].events | POLLOUT) : (pollfds[i].events ^ POLLOUT);
+			pollfds[i].events = val ? (pollfds[i].events | POLLOUT) : (pollfds[i].events & ~POLLOUT);
 	}
 }
 

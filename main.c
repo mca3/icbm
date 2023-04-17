@@ -158,6 +158,7 @@ main(int argc, char *argv[])
 
 	acceptfd = listenfd("127.0.0.1", "16667");
 	ircfd = connectfd("127.0.0.1", "6667");
+
 	debugf("listen fd %d, irc fd %d", acceptfd, ircfd);
 
 	init_evloop();
