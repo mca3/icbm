@@ -170,4 +170,7 @@ main(int argc, char *argv[])
 
 	close(acceptfd);
 	close(ircfd);
+
+	for (size_t i = 0; i < server_isupport.len; ++i)
+		free(server_isupport.data[i]);
 }

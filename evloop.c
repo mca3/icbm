@@ -66,7 +66,7 @@ remove_client(int fd, int pfd)
 	}
 
 	// First, free some space.
-	if (clients[cli].nick != NULL)
+	if (clients[cli].nick)
 		free(clients[cli].nick);
 
 	// We must move all clients ahead of it back one space
@@ -110,6 +110,62 @@ init_evloop(void)
 	pollfds[1].events = POLLIN;
 }
 
+static int
+pending_writes(void)
+{
+	size_t cli;
+	for (cli = 0; cli < clientptr; ++cli) {
+		if (clients[cli].b.sendptr != 0)
+			return 1;
+	}
+	return 0;
+}
+
+static void
+flush_all(void)
+{
+	int i;
+
+	for (int i = 2; i <= pollfdptr; ++i) {
+		// Only bother writing out data
+		pollfds[i].events &= POLLOUT;
+	}
+
+	while (pending_writes()) {
+		// add two to ignore connect/server socket
+		i = poll(pollfds+2, pollfdptr-1, -1);
+		if (i == -1) {
+			errorf("poll: %s", strerror(errno));
+			return;
+		}
+
+		for (int i = 2; i <= pollfdptr; ++i) {
+			if (pollfds[i].revents & POLLOUT)
+				client_writable(pollfds[i].fd);
+		}
+
+		// Remove dead clients
+		for (int i = 2; i <= pollfdptr; ++i) {
+			if (!(pollfds[i].revents & (POLLHUP | POLLERR | POLLNVAL)))
+				continue;
+			
+			debugf("Connection on fd %d died", pollfds[i].fd);
+			remove_client(pollfds[i].fd, i);
+		}
+	}
+
+	// Close all file descriptors
+	size_t cli;
+	for (cli = 0; cli <= clientptr; ++cli) {
+		if (clients[cli].nick)
+			free(clients[cli].nick);
+		close(clients[cli].fd);
+	}
+
+	free(pollfds);
+	free(clients);
+}
+
 void
 evloop(void)
 {
@@ -131,10 +187,6 @@ evloop(void)
 			while (server_readable());
 		if (pollfds[1].revents & POLLOUT)
 			server_writable();
-		if (pollfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-			errorf("Server connection died!");
-			return;
-		}
 
 		for (int i = 2; i <= pollfdptr; ++i) {
 			if (pollfds[i].revents & POLLIN)
@@ -150,6 +202,13 @@ evloop(void)
 			
 			debugf("Connection on fd %d died", pollfds[i].fd);
 			remove_client(pollfds[i].fd, i);
+		}
+
+		// Handle server death
+		if (pollfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+			errorf("Server connection died!");
+			flush_all();
+			return;
 		}
 	}
 }
