@@ -3,17 +3,23 @@
  *
  * Copyright (c) 2023 mca
  * 
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with  or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
  * 
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 #include <fcntl.h>
@@ -120,8 +126,6 @@ mca_ev_new(struct mca_ev **ev)
 		return -1;
 	memset(nev, 0, sizeof(*nev));
 
-	nev->safe = 1;
-
 	// Allocate the pfd array.
 	if (ensure(nev, MCA_EV_INIT_SIZE) == -1) {
 		free(nev);
@@ -180,6 +184,11 @@ mca_ev_append(struct mca_ev *ev, int fd, int flags)
  * "dead," i.e. poll(2) says that the file descriptor has entered an error
  * state.
  *
+ * Note that calling this guarantees that you are going to miss events for at
+ * least one file descriptor as in normal usage this method is only called
+ * during readable and writable events, and the handlers for those events are
+ * called from an iteration over all its known file descriptors.
+ *
  * This still calls on_remove.
  */
 void
@@ -196,9 +205,6 @@ mca_ev_remove(struct mca_ev *ev, int fd)
 
 	ev->len--;
 	memmove(ev->pfds + i, ev->pfds + i + 1, (ev->len - i)*sizeof(*pfd));
-
-	// Tell mca_ev_poll that it should reiterate over pollfds.
-	ev->safe = 0;
 }
 
 /* Sets flags on a file descriptor.
