@@ -13,16 +13,22 @@
 #include <unistd.h>
 #include <time.h>
 
-#include "log.h"
-#include "irc.h"
 #include "client.h"
+#include "ev.h"
+#include "irc.h"
+#include "log.h"
+#include "main.h"
 #include "server.h"
-#include "evloop.h"
 
 int ircfd = -1;
+int acceptfd = -1;
+
+struct mca_ev *ev;
 
 static char *username = NULL;
 static char *nickname = NULL;
+
+static int running = 1;
 
 /* listenfd attempts to listen on addr:port and exits if it cannot. */
 static int
@@ -80,6 +86,7 @@ listenfd(char *addr, char *port)
 	return sockfd;
 }
 
+/* connectfd connects to addr:port over TCP. */
 static int
 connectfd(char *addr, char *port)
 {
@@ -114,15 +121,109 @@ connectfd(char *addr, char *port)
 		break;
 	}
 
-	if (p == NULL) {
-		errorf("Couldn't connect to IRC server");
-		exit(EXIT_FAILURE);
-	}
-
 	freeaddrinfo(servinfo);
+
+	if (p == NULL)
+		return -1;
 	
 	fcntl(sockfd, F_SETFL, O_NONBLOCK); // Set non-blocking
 	return sockfd;
+}
+
+static void
+accept_conn(void)
+{
+	int fd = accept(acceptfd, NULL, NULL);
+	if (fd == -1) return;
+
+	fcntl(fd, F_SETFL, O_NONBLOCK); // Set non-blocking
+
+	if (clientptr + 1 >= clientsz) {
+		clientsz *= 2;
+		clients = realloc(clients, sizeof(struct client)*clientsz);
+	}
+
+	memset(&clients[clientptr], 0, sizeof(struct client));
+	clients[clientptr].fd = fd;
+
+	mca_ev_append(ev, fd, MCA_EV_READ);
+
+	debugf("New connection on fd %d", fd);
+
+	client_sendf(&clients[clientptr], "PING :%d", time(NULL));
+
+	++clientptr;
+}
+
+static int
+evremove(struct mca_ev *, int fd, void *)
+{
+	if (fd == ircfd || fd == acceptfd) {
+		if (fd == ircfd)
+			errorf("Server connection closed");
+		else
+			errorf("Listening socket closed");
+		running = 0;
+
+		return 0;
+	}
+
+	debugf("Connection on fd %d died", fd);
+			
+	// Find index in clients
+	int cli;
+	for (cli = 0; cli < clientptr; ++cli) {
+		if (clients[cli].fd == fd)
+			break;
+	}
+
+	// Free nick
+	if (clients[cli].nick)
+		free(clients[cli].nick);
+
+	// We must move all clients ahead of it back one space
+	memmove(&clients[cli], &clients[cli+1], sizeof(struct client)*(clientptr-cli));
+	clientptr--;
+}
+
+static int
+evread(struct mca_ev *, int fd, void *)
+{
+	if (fd == acceptfd) {
+		accept_conn();
+		return 0;
+	} else if (fd == ircfd)
+		return server_readable();
+
+	return client_readable(fd);
+}
+
+static int
+evwrite(struct mca_ev *, int fd, void *)
+{
+	if (fd == ircfd) {
+		server_writable();
+		return 0;
+	}
+
+	client_writable(fd);
+	return 0;
+}
+
+static void
+evloop(void)
+{
+	int i;
+
+	while (running) {
+		i = mca_ev_poll(ev, -1);
+		if (i == -1) {
+			errorf("poll: %s", strerror(errno));
+			break;
+		}
+	}
+
+	mca_ev_flush(ev, -1);
 }
 
 int
@@ -156,21 +257,65 @@ main(int argc, char *argv[])
 	if (!nickname)
 		nickname = username;
 
-	acceptfd = listenfd("127.0.0.1", "16667");
-	ircfd = connectfd("127.0.0.1", "6667");
+	// Setup event loop
+	if (mca_ev_new(&ev) == -1) {
+		errorf("Failed to setup event loop.");
+		exit(EXIT_FAILURE);
+	}
+	ev->on_readable = evread;
+	ev->on_writable = evwrite;
+	ev->on_remove = evremove;
+
+	// Initialize client list
+	clients = realloc(NULL, sizeof(struct client)*clientsz);
+	if (!clients) {
+		errorf("Failed to allocate clients", sizeof(struct client)*clientsz);
+		exit(EXIT_FAILURE);
+	}
+
+	// Connect
+	if ((ircfd = connectfd(address, port)) == -1) {
+		errorf("Failed to connect to the IRC server.");
+		mca_ev_free(ev);
+		free(clients);
+		exit(EXIT_FAILURE);
+	}
+
+	if ((acceptfd = listenfd(laddress, lport)) == -1) {
+		errorf("Failed to listen.");
+		mca_ev_free(ev);
+		close(ircfd);
+		free(clients);
+		exit(EXIT_FAILURE);
+	}
 
 	debugf("listen fd %d, irc fd %d", acceptfd, ircfd);
 
-	init_evloop();
+	// Further setup event loop.
+	mca_ev_append(ev, ircfd, MCA_EV_READ);
+	mca_ev_append(ev, acceptfd, MCA_EV_READ);
 
 	server_sendf("NICK :%s", nickname);
 	server_sendf("USER %s 0 * :%s", nickname, "icbm");
 
+	// Jump into the event loop.
 	evloop();
 
+	// Cleanup.
 	close(acceptfd);
 	close(ircfd);
 
+	mca_ev_free(ev);
+
+	size_t cli;
+	for (cli = 0; cli < clientptr; ++cli) {
+		if (clients[cli].nick)
+			free(clients[cli].nick);
+		close(clients[cli].fd);
+	}
+	free(clients);
+
 	for (size_t i = 0; i < server_isupport.len; ++i)
 		free(server_isupport.data[i]);
+	free(server_isupport.data);
 }

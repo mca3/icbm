@@ -23,6 +23,10 @@
 
 #include "vec.h"
 
+/* mca_vector_new creates a new instance of mca_vector.
+ *
+ * On error, NULL is returned.
+ */
 struct mca_vector *
 mca_vector_new(size_t cap)
 {
@@ -34,6 +38,11 @@ mca_vector_new(size_t cap)
 	return new;
 }
 
+/* mca_vector_free frees the vector.
+ *
+ * You should iterate through the vector and clean up all data before calling
+ * this, especially when you have dynamically allocated data.
+ */
 void
 mca_vector_free(struct mca_vector *v)
 {
@@ -41,16 +50,18 @@ mca_vector_free(struct mca_vector *v)
 	free(v);
 }
 
-/* Ensures that there is enough room for size elements.
+/* Ensures that there is enough room for another "n" elements.
  * If there is not enough room, an allocation is attempted.
  *
  * On error, -1 is returned.
  */
 int
-mca_vector_ensure(struct mca_vector *v, size_t size)
+mca_vector_ensure(struct mca_vector *v, size_t n)
 {
-	if (size > v->cap) {
-		void **newdata = realloc(v->data, sizeof(void *)*size);
+	size_t new_size = v->len + n;
+
+	if (new_size > v->cap) {
+		void **newdata = realloc(v->data, sizeof(void *)*new_size);
 		if (!newdata)
 			return -1;
 
@@ -60,24 +71,48 @@ mca_vector_ensure(struct mca_vector *v, size_t size)
 	return 0;
 }
 
+/* mca_vector_push appends something to the end of the vector.
+ * The index to where the value was put is returned.
+ *
+ * Upon error, -1 is returned.
+ */
 size_t
 mca_vector_push(struct mca_vector *v, void *ptr)
 {
-	if (mca_vector_ensure(v, v->len+1) == -1)
+	if (mca_vector_ensure(v, 1) == -1)
 		return -1;
 
 	v->data[v->len++] = ptr;
-	return v->len;
+	return v->len-1;
 }
 
+/* Removes an element from the vector.
+ *
+ * If i is less than 0, then the last element is popped off.
+ * Otherwise, the element at index i will be removed and all elements
+ * proceeding it moved back.
+ *
+ * An assertion is raised if the vector's length is zero.
+ */
 void
 mca_vector_pop(struct mca_vector *v, size_t i)
 {
-	// TODO: use i
 	assert(v->len > 0);
-	v->data[--v->len] = NULL;
+
+	if (i == -1) {
+		v->data[--v->len] = NULL;
+		return;
+	}
+
+	memmove(v->data + i, v->data + i + 1, (v->len - i - 1) * sizeof(void *));
+	v->len--;
 }
 
+/* Fetches an element from the vector.
+ *
+ * An assertion is raised if the index is greater or equal to the length of the
+ * vector, as you can not access data in either case.
+ * */
 void *
 mca_vector_get(struct mca_vector *v, size_t i)
 {

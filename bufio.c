@@ -100,6 +100,9 @@ read:
 	if (n == -1) {
 		if (errno & EAGAIN) return 0;
 		return n;
+	} else if (n == 0) {
+		// File descriptor likely closed.
+		return -1;
 	}
 
 	b->recvptr += n;

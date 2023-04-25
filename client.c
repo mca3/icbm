@@ -10,10 +10,15 @@
 #include <stdlib.h>
 
 #include "client.h"
-#include "evloop.h"
+#include "ev.h"
 #include "log.h"
+#include "main.h"
 #include "server.h"
 #include "vec.h"
+
+int clientsz = 8;
+int clientptr = 0;
+struct client *clients;
 
 static int cli_cap(struct client *c, struct irc_message *msg);
 static int cli_login(struct client *c, struct irc_message *msg);
@@ -31,14 +36,10 @@ static struct {
 	{ "PONG",	cli_ping },
 };
 
-int clientsz = 8;
-int clientptr = -1;
-struct client *clients;
-
 static struct client *
 find_client(int fd)
 {
-	for (int i = 0; i <= clientptr; ++i) {
+	for (int i = 0; i < clientptr; ++i) {
 		if (clients[i].fd == fd)
 			return &clients[i];
 	}
@@ -57,7 +58,7 @@ client_sendf(struct client *c, const char *fmt, ...)
 	char buf[2048];
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(c->fd, 1);
+	mca_ev_set_write(ev, c->fd, 1);
 
 	// Chuck stuff onto the buffer
 	va_list ap;
@@ -91,7 +92,7 @@ client_sendmsg(struct client *c, struct irc_message *msg)
 		return -1;
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(c->fd, 1);
+	mca_ev_set_write(ev, c->fd, 1);
 
 	// Chuck stuff onto the buffer
 	debugf("%d >> %s", c->fd, buf);
@@ -113,7 +114,7 @@ client_readable(int fd)
 
 	if ((n = bufio_readable(&c->b, fd)) == -1) {
 		warnf("failed reading from client fd %d: %s", fd, strerror(errno));
-		close(ircfd);
+		close(c->fd);
 		return 0;
 	}
 
@@ -152,7 +153,7 @@ client_writable(int fd)
 
 	if (n > 0) {
 		// Tell the event loop we no longer want to write out
-		ev_set_writeout(fd, 0);
+		mca_ev_set_write(ev, c->fd, 0);
 	} else if (n == -1) {
 		warnf("Write failed to fd %d: %s", fd, strerror(errno));
 		close(fd);

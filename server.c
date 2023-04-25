@@ -9,9 +9,10 @@
 
 #include "bufio.h"
 #include "client.h"
-#include "evloop.h"
+#include "ev.h"
 #include "irc.h"
 #include "log.h"
+#include "main.h"
 #include "server.h"
 #include "vec.h"
 
@@ -46,7 +47,7 @@ server_client_forward(struct irc_message *msg)
 		return;
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(ircfd, 1);
+	mca_ev_set_write(ev, ircfd, 1);
 
 	// Chuck stuff onto the buffer
 	debugf("* >> %s", buf);
@@ -58,9 +59,9 @@ server_client_forward(struct irc_message *msg)
 
 	// Send to all clients
 	// TODO: Only those whom are authenticated
-	for (int i = 0; i <= clientptr; ++i) {
+	for (int i = 0; i < clientptr; ++i) {
 		// TODO: This should be a client_... function.
-		ev_set_writeout(clients[i].fd, 1);
+		mca_ev_set_write(ev, clients[i].fd, 1);
 		bufio_write(&clients[i].b, buf, n);
 	}
 }
@@ -77,7 +78,7 @@ server_sendf(const char *fmt, ...)
 	char buf[2048];
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(ircfd, 1);
+	mca_ev_set_write(ev, ircfd, 1);
 
 	// Chuck stuff onto the buffer
 	va_list ap;
@@ -111,7 +112,7 @@ server_sendmsg(struct irc_message *msg)
 		return -1;
 
 	// Tell the event loop we want to write out
-	ev_set_writeout(ircfd, 1);
+	mca_ev_set_write(ev, ircfd, 1);
 
 	// Chuck stuff onto the buffer
 	debugf("server >> %s", buf);
@@ -167,7 +168,7 @@ server_writable(void)
 
 	if (n > 0) { // No more data
 		// Tell the event loop we no longer want to write out
-		ev_set_writeout(ircfd, 0);
+		mca_ev_set_write(ev, ircfd, 0);
 	} else if (n == -1) {
 		warnf("Server write failed: %s", strerror(errno));
 		close(ircfd);
